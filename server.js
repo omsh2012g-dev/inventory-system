@@ -6,21 +6,20 @@ const session = require('express-session');
 const bcrypt = require('bcrypt');
 
 const app = express();
-// This line makes the server compatible with hosting platforms like Render
 const PORT = process.env.PORT || 3000;
-const saltRounds = 10; // Complexity of the encryption
+const saltRounds = 10;
 
-// --- Security & Session Setup ---
+// --- إعدادات الحماية وتسجيل الدخول ---
 app.use(session({
     secret: 'a-very-strong-secret-key-for-hmc-system',
     resave: false,
     saveUninitialized: true,
-    cookie: { secure: false } 
+    cookie: { secure: false }
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// --- Database Setup ---
+// --- إعداد قاعدة البيانات ---
 const db = new sqlite3.Database('./warehouse.db', (err) => {
     if (err) { console.error('DATABASE CONNECTION ERROR', err.message); }
     else { console.log('Successfully connected to warehouse.db.'); }
@@ -28,8 +27,6 @@ const db = new sqlite3.Database('./warehouse.db', (err) => {
         db.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS drugs (id INTEGER PRIMARY KEY AUTOINCREMENT, drug_code TEXT NOT NULL, drug_name TEXT NOT NULL, barcode TEXT, quantity INTEGER NOT NULL, expiry_date TEXT, category TEXT NOT NULL, UNIQUE(drug_code, category), UNIQUE(barcode, category))`);
         db.run(`CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, drug_id INTEGER, type TEXT NOT NULL, quantity_change INTEGER NOT NULL, notes TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (drug_id) REFERENCES drugs(id))`);
-        
-        // Add a default hashed password on first run
         db.get("SELECT value FROM settings WHERE key = 'admin_password'", (err, row) => {
             if (!row) {
                 bcrypt.hash('12345', saltRounds, (err, hash) => {
@@ -42,14 +39,13 @@ const db = new sqlite3.Database('./warehouse.db', (err) => {
     });
 });
 
-// --- Auth Endpoints ---
+// --- Endpoints تسجيل الدخول والخروج ---
 app.post('/login', (req, res) => {
     const { password } = req.body;
     db.get("SELECT value FROM settings WHERE key = 'admin_password'", (err, row) => {
         if (err || !row) { return res.redirect('/login.html?error=1'); }
-        // Compare the submitted password with the hashed version in the database
         bcrypt.compare(password, row.value, (err, result) => {
-            if (result) { // If the passwords match
+            if (result) {
                 req.session.loggedIn = true;
                 res.redirect('/dashboard.html');
             } else {
@@ -62,22 +58,29 @@ app.get('/logout', (req, res) => {
     req.session.destroy(() => res.redirect('/login.html'));
 });
 
-// --- Auth Middleware ---
+// --- Middleware للتحقق من تسجيل الدخول ---
 const isAuthenticated = (req, res, next) => {
     if (req.session.loggedIn) { next(); } else { res.redirect('/login.html'); }
 };
 
-// --- Static Files & Route Protection ---
-app.use(express.static(path.join(__dirname)));
+// ========== هذا هو التعديل المهم ==========
+// أولاً، نحدد الصفحات المحمية ليتم التحقق منها بواسطة حارس الأمن
 app.get('/', (req, res) => res.redirect('/login.html'));
 app.get('/dashboard.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
 app.get('/categories.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'categories.html')));
 app.get('/index.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/settings.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'settings.html')));
+
+// ثانياً، نسمح للبواب بالوصول إلى بقية الملفات العامة (CSS, JS, الصور)
+app.use(express.static(path.join(__dirname)));
+
+// ثالثاً، نحمي كل الـ APIs
 app.use('/api', isAuthenticated);
+// ==========================================
+
 
 // --- API Endpoints ---
-// Endpoint to change password (with hashing)
+// ... (كل بقية الكود تبقى كما هي تمامًا)
 app.post('/api/change-password', (req, res) => {
     const { currentPassword, newPassword } = req.body;
     db.get("SELECT value FROM settings WHERE key = 'admin_password'", (err, row) => {
@@ -98,7 +101,6 @@ app.post('/api/change-password', (req, res) => {
     });
 });
 
-// All other APIs remain the same
 app.get('/api/dashboard-stats', (req, res) => {
     const queries = {
         lowStock: "SELECT COUNT(*) as count FROM drugs WHERE quantity < 20",
@@ -136,11 +138,16 @@ app.post('/api/drugs', (req, res) => {
     db.serialize(() => {
         const insertDrugSql = `INSERT INTO drugs (drug_code, drug_name, barcode, quantity, expiry_date, category) VALUES (?, ?, ?, ?, ?, ?)`;
         db.run(insertDrugSql, [drugCode, drugName, barcode || null, quantity, expiryDate || null, category], function (err) {
-            if (err) { return res.status(500).json({ message: err.message }); }
+            if (err) {
+                console.error("Error inserting into drugs table:", err.message);
+                return res.status(500).json({ message: err.message });
+            }
             const drug_id = this.lastID;
             const insertTransactionSql = `INSERT INTO transactions (drug_id, type, quantity_change, notes) VALUES (?, 'Initial Add', ?, ?)`;
             db.run(insertTransactionSql, [drug_id, quantity, 'Initial stock entry'], (err) => {
-                if (err) { console.error("Error inserting transaction:", err.message); }
+                if (err) {
+                    console.error("Error inserting into transactions table:", err.message);
+                }
                 res.status(201).json({ id: drug_id });
             });
         });
@@ -165,7 +172,9 @@ app.post('/api/drugs/withdraw/:id', (req, res) => {
 app.delete('/api/drugs/:id', (req, res) => {
     const id = req.params.id;
     db.serialize(() => {
-        db.run(`DELETE FROM transactions WHERE drug_id = ?`, [id], (err) => { if (err) { console.error("Error deleting transactions:", err.message); } });
+        db.run(`DELETE FROM transactions WHERE drug_id = ?`, [id], (err) => {
+             if (err) { console.error("Error deleting transactions:", err.message); }
+        });
         db.run("DELETE FROM drugs WHERE id = ?", id, (err) => {
             if (err) { return res.status(500).json({ error: err.message }); }
             res.status(200).json({ message: 'Deletion successful.' });
@@ -218,7 +227,7 @@ app.get('/api/transaction-report', (req, res) => {
     });
 });
 
-// --- Start Server ---
+// --- تشغيل الخادم ---
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
