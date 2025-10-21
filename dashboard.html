@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - HMC Management System</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <header class="app-header">
+        <div class="logo-container">
+            <img src="logo.png" alt="HMC Logo">
+        </div>
+        <div class="entity-info">
+            <h2>Dr. Suliman Alhabib medical centers (HMC)</h2>
+            <p>Qiddiya, Riyadh, Saudi Arabia</p>
+        </div>
+        <div class="header-controls">
+            <a href="/logout" class="logout-btn">Logout</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <h1>Main Dashboard</h1>
+        <div class="dashboard-grid">
+            <div class="stat-card low-stock">
+                <h3>Low Stock Items</h3>
+                <p class="count" id="low-stock-count">0</p>
+                <p>Items with quantity less than 20</p>
+            </div>
+            <div class="stat-card expiring-soon">
+                <h3>Expiring Soon Items</h3>
+                <p class="count" id="expiring-soon-count">0</p>
+                <p>Items expiring within 90 days</p>
+            </div>
+            <a href="/categories.html" class="stat-card all-categories">
+                <h3>Go to Categories</h3>
+                <p class="count">&rarr;</p>
+                <p>Manage Full Inventory</p>
+            </a>
+            <a href="/settings.html" class="stat-card settings">
+                <h3>Settings</h3>
+                <p class="count" style="font-size: 2.5rem;">⚙️</p>
+                <p>Change Admin Password</p>
+            </a>
+        </div>
+
+        <div class="chart-container">
+            <h2>Item Distribution by Category</h2>
+            <canvas id="categoryChart"></canvas>
+        </div>
+    </div>
+
+    <script src="dashboard.js"></script>
+</body>
+</html>
+

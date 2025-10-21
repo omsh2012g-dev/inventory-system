@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - HMC Inventory System</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header class="app-header">
+        <div class="logo-container">
+            <img src="logo.png" alt="HMC Logo">
+        </div>
+        <div class="entity-info">
+            <h2>Dr. Suliman Alhabib medical centers (HMC)</h2>
+            <p>Qiddiya, Riyadh, Saudi Arabia</p>
+        </div>
+        <div class="header-controls">
+            <!-- Empty for login page -->
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="login-container">
+            <h1>System Login</h1>
+            <form action="/login" method="POST">
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" placeholder="Enter your password" required>
+                </div>
+                <button type="submit">Login</button>
+            </form>
+            <p id="error-message" class="error-message" style="display: none;">Incorrect password. Please try again.</p>
+        </div>
+    </div>
+
+    <script>
+        // Script to show error message if login fails
+        document.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has('error')) {
+                const errorMessage = document.getElementById('error-message');
+                if (errorMessage) {
+                    errorMessage.style.display = 'block';
+                }
+            }
+        });
+    </script>
+</body>
+</html>
+
