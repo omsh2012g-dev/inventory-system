@@ -142,15 +142,13 @@ app.use('/api', isAuthenticated);
 app.use(express.static(path.join(__dirname)));
 
 // --- API Endpoints ---
-
-// ========== تصحيح عمليات قاعدة البيانات ==========
 app.post('/api/change-password', async (req, res) => {
     const { currentPassword, newPassword } = req.body;
-    let client; // Declare client outside try block
+    let client;
     try {
-        client = await pool.connect(); // Acquire client
+        client = await pool.connect();
         const result = await client.query("SELECT value FROM settings WHERE key = 'admin_password'");
-        if (result.rows.length === 0) { throw new Error('Password setting not found.'); } // More specific error
+        if (result.rows.length === 0) { throw new Error('Password setting not found.'); }
         const match = await bcrypt.compare(currentPassword, result.rows[0].value);
         if (!match) { return res.status(400).json({ message: 'Incorrect current password.' }); }
         const hash = await bcrypt.hash(newPassword, saltRounds);
@@ -160,12 +158,11 @@ app.post('/api/change-password', async (req, res) => {
         console.error('Change password error:', err);
         res.status(500).json({ message: 'Failed to update password.' });
     } finally {
-        if (client) client.release(); // Release client in finally block
+        if (client) client.release();
     }
 });
 
 app.get('/api/dashboard-stats', async (req, res) => {
-    // This endpoint only reads, no transaction needed, pool.query is fine
     try {
         const lowStockRes = await pool.query("SELECT COUNT(*) as count FROM drugs WHERE quantity < 20");
         const expiringSoonRes = await pool.query("SELECT COUNT(*) as count FROM drugs WHERE expiry_date IS NOT NULL AND expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + interval '90 days'");
@@ -182,7 +179,6 @@ app.get('/api/dashboard-stats', async (req, res) => {
 });
 
 app.get('/api/drugs', async (req, res) => {
-    // This endpoint only reads, pool.query is fine
     const { category, filter } = req.query;
     if (!category) { return res.status(400).json({ message: "Category is required." }); }
     let sql = "SELECT *, to_char(expiry_date, 'YYYY-MM-DD') as expiry_date FROM drugs WHERE category = $1";
@@ -205,7 +201,7 @@ app.get('/api/drugs', async (req, res) => {
 
 app.post('/api/drugs', async (req, res) => {
     const { drugCode, drugName, barcode, quantity, expiryDate, category } = req.body;
-    const client = await pool.connect(); // Acquire client for transaction
+    const client = await pool.connect();
     try {
         await client.query('BEGIN');
         const insertDrugSql = `INSERT INTO drugs (drug_code, drug_name, barcode, quantity, expiry_date, category) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`;
@@ -222,9 +218,9 @@ app.post('/api/drugs', async (req, res) => {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('Add drug error:', err);
-        res.status(500).json({ message: `Failed to add item: ${err.detail || err.message}` }); // Send more details if available
+        res.status(500).json({ message: `Failed to add item: ${err.detail || err.message}` });
     } finally {
-        client.release(); // Release client
+        client.release();
     }
 });
 
@@ -232,13 +228,13 @@ app.post('/api/drugs/withdraw/:id', async (req, res) => {
     const { id } = req.params;
     const { quantityToWithdraw, notes } = req.body;
     if (!quantityToWithdraw || quantityToWithdraw <= 0) { return res.status(400).json({ message: "Withdrawal quantity must be greater than zero." }); }
-    const client = await pool.connect(); // Acquire client for transaction
+    const client = await pool.connect();
     try {
         await client.query('BEGIN');
         const drugRes = await client.query("SELECT quantity FROM drugs WHERE id = $1 FOR UPDATE", [id]);
         if (drugRes.rows.length === 0) { throw new Error("Item not found."); }
         const currentQuantity = drugRes.rows[0].quantity;
-        if (currentQuantity < quantityToWithdraw) { throw new Error("Insufficient quantity."); } // More specific error
+        if (currentQuantity < quantityToWithdraw) { throw new Error("Insufficient quantity."); }
         const newQuantity = currentQuantity - quantityToWithdraw;
         await client.query("UPDATE drugs SET quantity = $1 WHERE id = $2", [newQuantity, id]);
         await client.query(`INSERT INTO transactions (drug_id, type, quantity_change, notes) VALUES ($1, 'Withdrawal', $2, $3)`, [id, -quantityToWithdraw, notes]);
@@ -249,16 +245,15 @@ app.post('/api/drugs/withdraw/:id', async (req, res) => {
         console.error('Withdraw error:', err);
         res.status(400).json({ message: err.message || "Withdrawal failed." });
     } finally {
-        client.release(); // Release client
+        client.release();
     }
 });
 
 app.delete('/api/drugs/:id', async (req, res) => {
     const { id } = req.params;
-    let client; // Declare client outside try block
+    let client;
     try {
-        client = await pool.connect(); // Acquire client
-        // Transactions are deleted automatically due to ON DELETE CASCADE
+        client = await pool.connect();
         const result = await client.query("DELETE FROM drugs WHERE id = $1", [id]);
         if (result.rowCount === 0) { return res.status(404).json({ message: 'Item not found.'}); }
         res.status(200).json({ message: 'Deletion successful.' });
@@ -266,28 +261,25 @@ app.delete('/api/drugs/:id', async (req, res) => {
         console.error('Delete drug error:', err);
         res.status(500).json({ error: err.message });
     } finally {
-        if (client) client.release(); // Release client
+        if (client) client.release();
     }
 });
 
 app.put('/api/drugs/:id', async (req, res) => {
     const { id } = req.params;
     const { drugCode, drugName, barcode, quantity, expiryDate, category } = req.body;
-    const client = await pool.connect(); // Acquire client for transaction
+    const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        const drugRes = await client.query("SELECT quantity FROM drugs WHERE id = $1 FOR UPDATE", [id]);
+        const drugRes = await pool.query("SELECT quantity FROM drugs WHERE id = $1 FOR UPDATE", [id]);
         if (drugRes.rows.length === 0) { throw new Error("Item not found."); }
         const oldQuantity = drugRes.rows[0].quantity;
         const sql = `UPDATE drugs SET drug_code = $1, drug_name = $2, barcode = $3, quantity = $4, expiry_date = $5, category = $6 WHERE id = $7`;
         await client.query(sql, [drugCode, drugName, barcode || null, quantity, expiryDate || null, category, id]);
         const quantityChange = quantity - oldQuantity;
-        // Only log transaction if quantity actually changed or if other details changed
         if (quantityChange !== 0) {
              await client.query(`INSERT INTO transactions (drug_id, type, quantity_change, notes) VALUES ($1, 'Update', $2, $3)`, [id, quantityChange, `Quantity updated from ${oldQuantity} to ${quantity}`]);
         } else {
-             // Consider logging even if quantity is same? Or check if other fields changed.
-             // For simplicity now, we log only quantity changes, but add a basic update log.
              await client.query(`INSERT INTO transactions (drug_id, type, quantity_change, notes) VALUES ($1, 'Update', 0, 'Item details updated (quantity unchanged)')`, [id]);
         }
         await client.query('COMMIT');
@@ -295,15 +287,67 @@ app.put('/api/drugs/:id', async (req, res) => {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('Update drug error:', err);
-        res.status(500).json({ message: err.detail || err.message }); // Send more details
+        res.status(500).json({ message: err.detail || err.message });
     } finally {
-        client.release(); // Release client
+        client.release();
     }
 });
 
-app.get('/api/report', async (req, res) => { /* ... code ... */ });
-app.get('/api/transaction-report', async (req, res) => { /* ... code ... */ });
+// ========== الكود الكامل لتقرير المخزون الحالي ==========
+app.get('/api/report', async (req, res) => {
+    const { category } = req.query;
+    if (!category) { return res.status(400).json({ message: "Category query parameter is required." }); }
+    const sql = "SELECT drug_code as \"Item Code\", drug_name as \"Item Name\", barcode as \"Barcode\", quantity as \"Quantity\", to_char(expiry_date, 'YYYY-MM-DD') as \"Expiry Date\" FROM drugs WHERE category = $1 ORDER BY drug_name ASC";
+    try {
+        const result = await pool.query(sql, [category]);
+        const worksheet = XLSX.utils.json_to_sheet(result.rows);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Items");
+        const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+        res.setHeader('Content-Disposition', `attachment; filename=Report_${category}_${new Date().toISOString().slice(0,10)}.xlsx`); // Add date to filename
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.send(buffer);
+    } catch (err) {
+        console.error('Current stock report error:', err);
+        res.status(500).json({ message: 'Failed to generate current stock report.' });
+    }
+});
 // =======================================================
+
+// ========== الكود الكامل لتقرير سجل الحركات ==========
+app.get('/api/transaction-report', async (req, res) => {
+    const { category } = req.query;
+    if (!category) { return res.status(400).json({ message: "Category query parameter is required." }); }
+    const sql = `
+        SELECT
+            to_char(t.timestamp, 'YYYY-MM-DD HH24:MI:SS') AS "Date/Time",
+            d.drug_name AS "Item Name",
+            d.drug_code AS "Item Code",
+            d.barcode AS "Barcode",
+            t.type AS "Transaction Type",
+            t.quantity_change AS "Quantity Change",
+            t.notes AS "Notes"
+        FROM transactions t
+        JOIN drugs d ON t.drug_id = d.id
+        WHERE d.category = $1
+        ORDER BY t.timestamp DESC`;
+    try {
+        const result = await pool.query(sql, [category]);
+        const worksheet = XLSX.utils.json_to_sheet(result.rows);
+        // Adjust column widths (optional but recommended)
+        worksheet['!cols'] = [ { wch: 20 }, { wch: 30 }, { wch: 15 }, { wch: 20 }, { wch: 15 }, { wch: 10 }, { wch: 40 } ];
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Transaction History");
+        const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+        res.setHeader('Content-Disposition', `attachment; filename=Transaction_Report_${category}_${new Date().toISOString().slice(0,10)}.xlsx`); // Add date
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.send(buffer);
+    } catch (err) {
+        console.error('Transaction report error:', err);
+        res.status(500).json({ message: 'Failed to generate transaction report.' });
+    }
+});
+// ====================================================
 
 // --- Error Handling Middleware ---
 app.use((err, req, res, next) => {
