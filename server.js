@@ -78,22 +78,29 @@ app.get('/logout', (req, res) => {
 
 // --- Auth Middleware (after login routes) ---
 const isAuthenticated = (req, res, next) => {
-    if (req.session.loggedIn) { next(); } else { res.redirect('/login.html'); }
+    // Basic check if session exists and has loggedIn property
+    if (req.session && req.session.loggedIn) {
+        return next(); // User is authenticated, proceed to the next middleware/route handler
+    }
+    // User is not authenticated, redirect to login page
+    res.redirect('/login.html');
 };
 
-// --- Static Files & Route Protection ---
-// Serve public static files (like CSS, login page images) first
-app.use(express.static(path.join(__dirname)));
 
-// Protect main application routes (comes AFTER static files)
+// ========== تعديل الترتيب هنا ==========
+// أولاً: تعريف الصفحات المحمية وحارس الأمن الخاص بها
 app.get('/', (req, res) => res.redirect('/login.html')); // Root redirects to login
 app.get('/dashboard.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
 app.get('/categories.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'categories.html')));
 app.get('/index.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/settings.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'settings.html')));
 
-// Protect all API routes (comes last before error handlers/server start)
+// ثانياً: خدمة الملفات العامة (مثل CSS, JS, الصور) بعد التحقق من الصفحات المحمية
+app.use(express.static(path.join(__dirname)));
+
+// ثالثاً: حماية كل الـ APIs
 app.use('/api', isAuthenticated);
+// =====================================
 
 
 // --- API Endpoints ---
