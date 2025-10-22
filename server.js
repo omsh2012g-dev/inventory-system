@@ -4,34 +4,45 @@ const XLSX = require('xlsx');
 const session = require('express-session');
 const bcrypt = require('bcrypt');
 const { Pool } = require('pg');
+const pgSession = require('connect-pg-simple')(session); // <-- استيراد مخزن الجلسات الجديد
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const saltRounds = 10;
 
-// --- Security & Session Setup (comes first) ---
-app.use(session({
-    secret: process.env.SESSION_SECRET || 'a-very-strong-secret-key-for-hmc-system',
-    resave: false,
-    saveUninitialized: true,
-    cookie: { secure: process.env.NODE_ENV === 'production' } // Use secure cookies in production
-}));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true })); // Important for login form data
-
 // --- PostgreSQL Database Setup ---
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false // Required for Render connections
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-// --- Initialize Database ---
+// --- Security & Session Setup (Using PostgreSQL for session store) ---
+app.use(session({
+    store: new pgSession({ // <-- استخدام قاعدة البيانات لتخزين الجلسات
+        pool: pool,                // الاتصال بقاعدة البيانات الحالية
+        tableName: 'user_sessions', // اسم الجدول لتخزين الجلسات (سيتم إنشاؤه تلقائيًا)
+        createTableIfMissing: true // إنشاء الجدول إذا لم يكن موجودًا
+    }),
+    secret: process.env.SESSION_SECRET || 'a-very-strong-secret-key-for-hmc-system',
+    resave: false,
+    saveUninitialized: false, // تغييرها إلى false أفضل للأمان وتوفير الموارد
+    cookie: {
+        secure: process.env.NODE_ENV === 'production', // Use secure cookies in production
+        maxAge: 1000 * 60 * 60 * 24 * 7, // صلاحية الكوكي: أسبوع واحد (اختياري)
+        sameSite: 'lax' // حماية إضافية ضد هجمات CSRF
+    }
+}));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// --- Initialize Database Tables ---
 const initializeDatabase = async () => {
     const client = await pool.connect();
     try {
         await client.query(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
         await client.query(`CREATE TABLE IF NOT EXISTS drugs (id SERIAL PRIMARY KEY, drug_code TEXT NOT NULL, drug_name TEXT NOT NULL, barcode TEXT, quantity INTEGER NOT NULL, expiry_date DATE, category TEXT NOT NULL, UNIQUE(drug_code, category), UNIQUE(barcode, category))`);
         await client.query(`CREATE TABLE IF NOT EXISTS transactions (id SERIAL PRIMARY KEY, drug_id INTEGER REFERENCES drugs(id) ON DELETE CASCADE, type TEXT NOT NULL, quantity_change INTEGER NOT NULL, notes TEXT, timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP)`);
+
         const passwordCheck = await client.query("SELECT value FROM settings WHERE key = 'admin_password'");
         if (passwordCheck.rows.length === 0) {
             const hash = await bcrypt.hash('12345', saltRounds);
@@ -47,12 +58,11 @@ const initializeDatabase = async () => {
 };
 initializeDatabase();
 
-// --- Auth Endpoints (before protection) ---
-// Login endpoint sends JSON response instead of redirect
+// --- Auth Endpoints ---
 app.post('/login', async (req, res) => {
     console.log(">>> Received POST request on /login");
     const { password } = req.body;
-    console.log("Login attempt with password:", password ? 'provided' : 'missing'); // Avoid logging password directly
+    console.log("Login attempt..."); // Don't log password
     try {
         const result = await pool.query("SELECT value FROM settings WHERE key = 'admin_password'");
         if (result.rows.length > 0) {
@@ -61,14 +71,12 @@ app.post('/login', async (req, res) => {
             const match = await bcrypt.compare(password, hashedPassword);
             console.log("Password match result:", match);
             if (match) {
-                req.session.loggedIn = true;
+                req.session.loggedIn = true; // Set the session variable
                 console.log("Login successful, sending success response.");
-                // Send success JSON response
                 return res.json({ success: true });
             }
         }
         console.log("Login failed, sending failure response.");
-        // Send failure JSON response
         res.status(401).json({ success: false, message: 'Incorrect password.' });
     } catch (err) {
         console.error('Login error:', err);
@@ -76,29 +84,46 @@ app.post('/login', async (req, res) => {
     }
 });
 app.get('/logout', (req, res) => {
-    req.session.destroy(() => res.redirect('/login.html'));
+    req.session.destroy((err) => {
+        if(err) {
+            console.error("Logout error:", err);
+            return res.redirect('/dashboard.html'); // Or an error page
+        }
+        res.clearCookie('connect.sid'); // Clear the session cookie
+        res.redirect('/login.html');
+    });
 });
 
-// --- Auth Middleware (after login routes) ---
+// --- Auth Middleware ---
 const isAuthenticated = (req, res, next) => {
     if (req.session && req.session.loggedIn) {
         return next();
     }
+    // If API request, send 401 Unauthorized
+    if (req.originalUrl.startsWith('/api')) {
+       return res.status(401).json({ error: 'Unauthorized' });
+    }
+    // Otherwise redirect to login
     res.redirect('/login.html');
 };
 
 // --- Static Files & Route Protection ---
-// Serve static files FIRST for login page assets etc.
-app.use(express.static(path.join(__dirname)));
-// Then protect specific routes
-app.get('/', (req, res) => res.redirect('/login.html')); // Root redirects to login
+// Serve static files needed for login page *before* authentication check
+app.use(express.static(path.join(__dirname), {
+    index: false, // Don't serve index.html by default
+    // Only serve files absolutely needed before login if stricter control is needed
+}));
+app.get('/login.html', (req, res) => res.sendFile(path.join(__dirname, 'login.html')));
+app.get('/style.css', (req, res) => res.sendFile(path.join(__dirname, 'style.css')));
+// Add any other public assets (like logo.png if needed on login)
+
+// Protect all other routes
+app.get('/', (req, res) => res.redirect('/login.html'));
 app.get('/dashboard.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
 app.get('/categories.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'categories.html')));
 app.get('/index.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/settings.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'settings.html')));
-// Protect API routes last before 404 handler
-app.use('/api', isAuthenticated);
-
+app.use('/api', isAuthenticated); // Protect API routes
 
 // --- API Endpoints ---
 app.post('/api/change-password', async (req, res) => {
@@ -207,7 +232,6 @@ app.post('/api/drugs/withdraw/:id', async (req, res) => {
 app.delete('/api/drugs/:id', async (req, res) => {
     const { id } = req.params;
     try {
-        // Transactions are deleted automatically due to ON DELETE CASCADE
         const result = await pool.query("DELETE FROM drugs WHERE id = $1", [id]);
         if (result.rowCount === 0) { return res.status(404).json({ message: 'Item not found.'}); }
         res.status(200).json({ message: 'Deletion successful.' });
