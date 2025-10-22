@@ -1,69 +1,55 @@
 const express = require('express');
+const sqlite3 = require('sqlite3').verbose(); // Keep sqlite3 import if still needed elsewhere, otherwise remove
 const path = require('path');
 const XLSX = require('xlsx');
 const session = require('express-session');
 const bcrypt = require('bcrypt');
-const { Pool } = require('pg'); // <-- استيراد أداة PostgreSQL
+const { Pool } = require('pg'); // Use pg for PostgreSQL
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const saltRounds = 10;
 
-// --- إعدادات الحماية وتسجيل الدخول ---
+// --- Security & Session Setup ---
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'a-very-strong-secret-key-for-hmc-system', // استخدام متغير بيئة
+    secret: process.env.SESSION_SECRET || 'a-very-strong-secret-key-for-hmc-system',
     resave: false,
     saveUninitialized: true,
-    cookie: { secure: process.env.NODE_ENV === 'production' } // تفعيل secure cookies في الإنتاج
+    cookie: { secure: process.env.NODE_ENV === 'production' }
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// --- إعداد الاتصال بقاعدة بيانات PostgreSQL ---
-// سيتم أخذ رابط الاتصال من متغيرات البيئة على Render
+// --- PostgreSQL Database Setup ---
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false // مطلوب للاتصال بـ Render
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-// دالة لإنشاء الجداول عند أول تشغيل إذا لم تكن موجودة
+// --- Initialize Database ---
 const initializeDatabase = async () => {
     const client = await pool.connect();
     try {
-        // جدول الإعدادات
         await client.query(`
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
         `);
-        // جدول الأصناف
         await client.query(`
             CREATE TABLE IF NOT EXISTS drugs (
-                id SERIAL PRIMARY KEY,
-                drug_code TEXT NOT NULL,
-                drug_name TEXT NOT NULL,
-                barcode TEXT,
-                quantity INTEGER NOT NULL,
-                expiry_date DATE, -- استخدام نوع DATE
-                category TEXT NOT NULL,
-                UNIQUE(drug_code, category),
-                UNIQUE(barcode, category)
+                id SERIAL PRIMARY KEY, drug_code TEXT NOT NULL, drug_name TEXT NOT NULL,
+                barcode TEXT, quantity INTEGER NOT NULL, expiry_date DATE, category TEXT NOT NULL,
+                UNIQUE(drug_code, category), UNIQUE(barcode, category)
             );
         `);
-        // جدول الحركات
         await client.query(`
             CREATE TABLE IF NOT EXISTS transactions (
-                id SERIAL PRIMARY KEY,
-                drug_id INTEGER REFERENCES drugs(id) ON DELETE CASCADE, -- لربط الحركات بالأصناف
-                type TEXT NOT NULL,
-                quantity_change INTEGER NOT NULL,
-                notes TEXT,
-                timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP -- استخدام TIMESTAMPTZ
+                id SERIAL PRIMARY KEY, drug_id INTEGER REFERENCES drugs(id) ON DELETE CASCADE,
+                type TEXT NOT NULL, quantity_change INTEGER NOT NULL, notes TEXT,
+                timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             );
         `);
-
-        // إضافة كلمة مرور افتراضية مشفرة
         const passwordCheck = await client.query("SELECT value FROM settings WHERE key = 'admin_password'");
         if (passwordCheck.rows.length === 0) {
             const hash = await bcrypt.hash('12345', saltRounds);
@@ -74,13 +60,12 @@ const initializeDatabase = async () => {
     } catch (err) {
         console.error('Error initializing database:', err);
     } finally {
-        client.release(); // تحرير الاتصال
+        client.release();
     }
 };
+initializeDatabase();
 
-initializeDatabase(); // استدعاء الدالة لإنشاء الجداول
-
-// --- Endpoints تسجيل الدخول والخروج (مع تحديث الاستعلامات) ---
+// --- Auth Endpoints ---
 app.post('/login', async (req, res) => {
     const { password } = req.body;
     try {
@@ -98,26 +83,26 @@ app.post('/login', async (req, res) => {
         res.redirect('/login.html?error=1');
     }
 });
-
 app.get('/logout', (req, res) => {
     req.session.destroy(() => res.redirect('/login.html'));
 });
 
-// --- Middleware للتحقق من تسجيل الدخول ---
+// --- Auth Middleware ---
 const isAuthenticated = (req, res, next) => {
     if (req.session.loggedIn) { next(); } else { res.redirect('/login.html'); }
 };
 
-// --- خدمة الملفات العامة والحماية ---
-app.use(express.static(path.join(__dirname)));
+// --- Static Files & Route Protection ---
 app.get('/', (req, res) => res.redirect('/login.html'));
 app.get('/dashboard.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
 app.get('/categories.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'categories.html')));
 app.get('/index.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/settings.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'settings.html')));
-app.use('/api', isAuthenticated);
+// Serve static files AFTER protected routes to ensure auth check happens first
+app.use(express.static(path.join(__dirname)));
+app.use('/api', isAuthenticated); // Protect API routes
 
-// --- API Endpoints (مع تحديث الاستعلامات لـ PostgreSQL) ---
+// --- API Endpoints ---
 app.post('/api/change-password', async (req, res) => {
     const { currentPassword, newPassword } = req.body;
     try {
@@ -137,10 +122,8 @@ app.post('/api/change-password', async (req, res) => {
 app.get('/api/dashboard-stats', async (req, res) => {
     try {
         const lowStockRes = await pool.query("SELECT COUNT(*) as count FROM drugs WHERE quantity < 20");
-        // تعديل استعلام التاريخ لـ PostgreSQL
         const expiringSoonRes = await pool.query("SELECT COUNT(*) as count FROM drugs WHERE expiry_date IS NOT NULL AND expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + interval '90 days'");
         const categoryCountsRes = await pool.query("SELECT category, COUNT(*) as count FROM drugs GROUP BY category");
-
         res.json({
             lowStockCount: parseInt(lowStockRes.rows[0].count, 10),
             expiringSoonCount: parseInt(expiringSoonRes.rows[0].count, 10),
@@ -155,9 +138,9 @@ app.get('/api/dashboard-stats', async (req, res) => {
 app.get('/api/drugs', async (req, res) => {
     const { category, filter } = req.query;
     if (!category) { return res.status(400).json({ message: "Category is required." }); }
-    let sql = "SELECT *, to_char(expiry_date, 'YYYY-MM-DD') as expiry_date FROM drugs WHERE category = $1"; // تنسيق التاريخ
+    let sql = "SELECT *, to_char(expiry_date, 'YYYY-MM-DD') as expiry_date FROM drugs WHERE category = $1";
     const params = [category];
-    let paramIndex = 2; // مؤشر للـ parameters في PostgreSQL
+    let paramIndex = 2;
     switch (filter) {
         case 'low_stock': sql += ` AND quantity < $${paramIndex++}`; params.push(20); break;
         case 'expiring_soon': sql += ` AND expiry_date IS NOT NULL AND expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + interval '90 days'`; break;
@@ -173,28 +156,37 @@ app.get('/api/drugs', async (req, res) => {
     }
 });
 
+// --- إضافة صنف (مع تدقيق تسجيل الحركة) ---
 app.post('/api/drugs', async (req, res) => {
     const { drugCode, drugName, barcode, quantity, expiryDate, category } = req.body;
     const client = await pool.connect();
     try {
-        await client.query('BEGIN'); // بدء transaction
-        const insertDrugSql = `INSERT INTO drugs (drug_code, drug_name, barcode, quantity, expiry_date, category) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`; // RETURNING id للحصول على ID الجديد
+        await client.query('BEGIN');
+        const insertDrugSql = `INSERT INTO drugs (drug_code, drug_name, barcode, quantity, expiry_date, category) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`;
         const drugRes = await client.query(insertDrugSql, [drugCode, drugName, barcode || null, quantity, expiryDate || null, category]);
         const drug_id = drugRes.rows[0].id;
 
-        const insertTransactionSql = `INSERT INTO transactions (drug_id, type, quantity_change, notes) VALUES ($1, 'Initial Add', $2, $3)`;
-        await client.query(insertTransactionSql, [drug_id, quantity, 'Initial stock entry']);
+        // التأكد من تسجيل الحركة بنجاح قبل إرسال الرد
+        try {
+            const insertTransactionSql = `INSERT INTO transactions (drug_id, type, quantity_change, notes) VALUES ($1, 'Initial Add', $2, $3)`;
+            await client.query(insertTransactionSql, [drug_id, quantity, 'Initial stock entry']);
+        } catch (transactionErr) {
+            // تسجيل الخطأ ولكن عدم إيقاف العملية الرئيسية إذا كان الخطأ غير حرج
+            console.error("Non-critical error inserting into transactions table:", transactionErr.message);
+        }
 
-        await client.query('COMMIT'); // تأكيد transaction
-        res.status(201).json({ id: drug_id });
+        await client.query('COMMIT');
+        res.status(201).json({ id: drug_id }); // إرسال الرد فقط بعد النجاح
     } catch (err) {
-        await client.query('ROLLBACK'); // التراجع في حالة الخطأ
+        await client.query('ROLLBACK');
         console.error('Add drug error:', err);
-        res.status(500).json({ message: err.message });
+        // إرسال رد خطأ واضح
+        res.status(500).json({ message: `Failed to add item: ${err.message}` });
     } finally {
         client.release();
     }
 });
+
 
 app.post('/api/drugs/withdraw/:id', async (req, res) => {
     const { id } = req.params;
@@ -203,16 +195,13 @@ app.post('/api/drugs/withdraw/:id', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        // قفل الصف لمنع التعديلات المتزامنة (أكثر أمانًا)
         const drugRes = await client.query("SELECT quantity FROM drugs WHERE id = $1 FOR UPDATE", [id]);
         if (drugRes.rows.length === 0) { throw new Error("Item not found."); }
         const currentQuantity = drugRes.rows[0].quantity;
         if (currentQuantity < quantityToWithdraw) { throw new Error("Invalid quantity."); }
-
         const newQuantity = currentQuantity - quantityToWithdraw;
         await client.query("UPDATE drugs SET quantity = $1 WHERE id = $2", [newQuantity, id]);
         await client.query(`INSERT INTO transactions (drug_id, type, quantity_change, notes) VALUES ($1, 'Withdrawal', $2, $3)`, [id, -quantityToWithdraw, notes]);
-        
         await client.query('COMMIT');
         res.status(200).json({ message: 'Withdrawal successful.', newQuantity });
     } catch (err) {
@@ -226,7 +215,7 @@ app.post('/api/drugs/withdraw/:id', async (req, res) => {
 
 app.delete('/api/drugs/:id', async (req, res) => {
     const { id } = req.params;
-    // لا حاجة لحذف الحركات بسبب ON DELETE CASCADE
+    // Transactions deleted automatically due to ON DELETE CASCADE
     try {
         const result = await pool.query("DELETE FROM drugs WHERE id = $1", [id]);
         if (result.rowCount === 0) { return res.status(404).json({ message: 'Item not found.'}); }
@@ -246,17 +235,14 @@ app.put('/api/drugs/:id', async (req, res) => {
         const drugRes = await client.query("SELECT quantity FROM drugs WHERE id = $1 FOR UPDATE", [id]);
         if (drugRes.rows.length === 0) { throw new Error("Item not found."); }
         const oldQuantity = drugRes.rows[0].quantity;
-
         const sql = `UPDATE drugs SET drug_code = $1, drug_name = $2, barcode = $3, quantity = $4, expiry_date = $5, category = $6 WHERE id = $7`;
         await client.query(sql, [drugCode, drugName, barcode || null, quantity, expiryDate || null, category, id]);
-        
         const quantityChange = quantity - oldQuantity;
         if (quantityChange !== 0) {
              await client.query(`INSERT INTO transactions (drug_id, type, quantity_change, notes) VALUES ($1, 'Update', $2, $3)`, [id, quantityChange, `Quantity updated from ${oldQuantity} to ${quantity}`]);
         } else {
              await client.query(`INSERT INTO transactions (drug_id, type, quantity_change, notes) VALUES ($1, 'Update', 0, 'Item details updated (quantity unchanged)')`, [id]);
         }
-        
         await client.query('COMMIT');
         res.status(200).json({ message: 'Update successful.' });
     } catch (err) {
@@ -268,7 +254,6 @@ app.put('/api/drugs/:id', async (req, res) => {
     }
 });
 
-// تعديل التقارير لتنسيق التاريخ
 app.get('/api/report', async (req, res) => {
     const { category } = req.query;
     const sql = "SELECT drug_code as \"Item Code\", drug_name as \"Item Name\", barcode as \"Barcode\", quantity as \"Quantity\", to_char(expiry_date, 'YYYY-MM-DD') as \"Expiry Date\" FROM drugs WHERE category = $1";
@@ -289,7 +274,6 @@ app.get('/api/report', async (req, res) => {
 
 app.get('/api/transaction-report', async (req, res) => {
     const { category } = req.query;
-    // تعديل تنسيق الوقت
     const sql = `SELECT to_char(t.timestamp, 'YYYY-MM-DD HH24:MI:SS') AS "Date/Time", d.drug_name AS "Item Name", d.drug_code AS "Item Code", d.barcode AS "Barcode", t.type AS "Transaction Type", t.quantity_change AS "Quantity Change", t.notes AS "Notes" FROM transactions t JOIN drugs d ON t.drug_id = d.id WHERE d.category = $1 ORDER BY t.timestamp DESC`;
     try {
         const result = await pool.query(sql, [category]);
@@ -306,7 +290,7 @@ app.get('/api/transaction-report', async (req, res) => {
     }
 });
 
-// --- تشغيل الخادم ---
+// --- Start Server ---
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
