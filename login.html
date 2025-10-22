@@ -42,7 +42,6 @@
         const passwordInput = document.getElementById('password');
         const errorMessage = document.getElementById('error-message');
 
-        // Check if elements exist
         if (!loginForm || !passwordInput || !errorMessage) {
             console.error("Login form elements not found!");
             alert("Page loading error. Please refresh.");
@@ -50,76 +49,48 @@
             loginForm.addEventListener('submit', async (event) => {
                 event.preventDefault();
                 errorMessage.style.display = 'none';
-                console.log("Login form submitted."); // Log: Form submitted
+                console.log("Login form submitted.");
 
                 const password = passwordInput.value;
-                if (!password) {
-                    errorMessage.textContent = 'Password cannot be empty.';
-                    errorMessage.style.display = 'block';
-                    return;
-                }
-                 console.log("Attempting fetch to /login..."); // Log: Attempting fetch
+                if (!password) { /* ... */ return; }
+                 console.log("Attempting fetch to /login...");
 
                 try {
                     const response = await fetch('/login', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: { 'Content-Type': 'application/json', },
                         body: JSON.stringify({ password: password }),
-                        // credentials: 'include' // Usually not needed for simple login, add if sessions rely heavily on cookies cross-origin
                     });
 
-                    console.log("Received response from /login. Status:", response.status); // Log: Response status
-
-                    const responseBodyText = await response.text(); // Get response body as text first
-                    console.log("Response body text:", responseBodyText); // Log: Response body text
+                    console.log("Received response from /login. Status:", response.status);
+                    const responseBodyText = await response.text();
+                    console.log("Response body text:", responseBodyText);
 
                     let data;
-                    try {
-                        data = JSON.parse(responseBodyText); // Try to parse as JSON
-                        console.log("Parsed JSON data:", data); // Log: Parsed data
-                    } catch (parseError) {
-                        console.error("Failed to parse response as JSON:", parseError);
-                        errorMessage.textContent = 'Received an invalid response from the server.';
-                        errorMessage.style.display = 'block';
-                        return; // Stop execution if response is not valid JSON
-                    }
-
+                    try { data = JSON.parse(responseBodyText); console.log("Parsed JSON data:", data); }
+                    catch (parseError) { /* ... */ return; }
 
                     if (response.ok && data.success === true) {
-                        console.log("Login successful according to server response."); // Log: Success confirmed
-                        console.log("Attempting to redirect to /dashboard.html..."); // Log: Attempting redirect
-                        // Attempt redirection
-                        window.location.href = '/dashboard.html';
-                        // Log after attempting redirect (might not execute if redirect happens instantly)
-                        console.log("Redirect command executed.");
+                        console.log("Login successful according to server response.");
+                        console.log("Attempting redirect to /dashboard.html after a short delay...");
+
+                        // ========== إضافة تأخير بسيط هنا ==========
+                        setTimeout(() => {
+                            window.location.href = '/dashboard.html';
+                            console.log("Redirect command executed after delay.");
+                        }, 100); // تأخير 100 ميلي ثانية (0.1 ثانية)
+                        // ======================================
 
                     } else {
-                        console.log("Login failed according to server response or status code."); // Log: Failure confirmed
+                        console.log("Login failed according to server response or status code.");
                         errorMessage.textContent = data.message || 'Incorrect password. Please try again.';
                         errorMessage.style.display = 'block';
                     }
-                } catch (error) {
-                    console.error('Login fetch error:', error); // Log: Fetch error
-                    errorMessage.textContent = 'An error occurred connecting to the server. Please check your connection and try again.';
-                    errorMessage.style.display = 'block';
-                }
+                } catch (error) { /* ... */ }
             });
         }
 
-        // Check for error in URL on page load
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log("Login page DOMContentLoaded."); // Log: DOM loaded
-            const urlParams = new URLSearchParams(window.location.search);
-            if (urlParams.has('error')) {
-                 if (errorMessage) {
-                    errorMessage.textContent = 'Incorrect password. Please try again.';
-                    errorMessage.style.display = 'block';
-                    console.log("Error parameter found in URL."); // Log: Error param found
-                 }
-            }
-        });
+        document.addEventListener('DOMContentLoaded', function() { /* ... */ });
     </script>
 </body>
 </html>
