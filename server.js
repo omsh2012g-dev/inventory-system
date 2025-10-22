@@ -48,28 +48,31 @@ const initializeDatabase = async () => {
 initializeDatabase();
 
 // --- Auth Endpoints (before protection) ---
+// Login endpoint sends JSON response instead of redirect
 app.post('/login', async (req, res) => {
-    console.log(">>> Received POST request on /login"); // New debug log
+    console.log(">>> Received POST request on /login");
     const { password } = req.body;
-    console.log("Login attempt with password:", password);
+    console.log("Login attempt with password:", password ? 'provided' : 'missing'); // Avoid logging password directly
     try {
         const result = await pool.query("SELECT value FROM settings WHERE key = 'admin_password'");
         if (result.rows.length > 0) {
             const hashedPassword = result.rows[0].value;
-            console.log("Stored hash:", hashedPassword);
+            console.log("Stored hash found.");
             const match = await bcrypt.compare(password, hashedPassword);
             console.log("Password match result:", match);
             if (match) {
                 req.session.loggedIn = true;
-                console.log("Login successful, redirecting to dashboard.");
-                return res.redirect('/dashboard.html');
+                console.log("Login successful, sending success response.");
+                // Send success JSON response
+                return res.json({ success: true });
             }
         }
-        console.log("Login failed, redirecting back to login.");
-        res.redirect('/login.html?error=1');
+        console.log("Login failed, sending failure response.");
+        // Send failure JSON response
+        res.status(401).json({ success: false, message: 'Incorrect password.' });
     } catch (err) {
         console.error('Login error:', err);
-        res.redirect('/login.html?error=1');
+        res.status(500).json({ success: false, message: 'Server error during login.' });
     }
 });
 app.get('/logout', (req, res) => {
@@ -78,29 +81,23 @@ app.get('/logout', (req, res) => {
 
 // --- Auth Middleware (after login routes) ---
 const isAuthenticated = (req, res, next) => {
-    // Basic check if session exists and has loggedIn property
     if (req.session && req.session.loggedIn) {
-        return next(); // User is authenticated, proceed to the next middleware/route handler
+        return next();
     }
-    // User is not authenticated, redirect to login page
     res.redirect('/login.html');
 };
 
-
-// ========== تعديل الترتيب هنا ==========
-// أولاً: تعريف الصفحات المحمية وحارس الأمن الخاص بها
+// --- Static Files & Route Protection ---
+// Serve static files FIRST for login page assets etc.
+app.use(express.static(path.join(__dirname)));
+// Then protect specific routes
 app.get('/', (req, res) => res.redirect('/login.html')); // Root redirects to login
 app.get('/dashboard.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
 app.get('/categories.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'categories.html')));
 app.get('/index.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/settings.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'settings.html')));
-
-// ثانياً: خدمة الملفات العامة (مثل CSS, JS, الصور) بعد التحقق من الصفحات المحمية
-app.use(express.static(path.join(__dirname)));
-
-// ثالثاً: حماية كل الـ APIs
+// Protect API routes last before 404 handler
 app.use('/api', isAuthenticated);
-// =====================================
 
 
 // --- API Endpoints ---
@@ -226,7 +223,7 @@ app.put('/api/drugs/:id', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        const drugRes = await client.query("SELECT quantity FROM drugs WHERE id = $1 FOR UPDATE", [id]);
+        const drugRes = await pool.query("SELECT quantity FROM drugs WHERE id = $1 FOR UPDATE", [id]);
         if (drugRes.rows.length === 0) { throw new Error("Item not found."); }
         const oldQuantity = drugRes.rows[0].quantity;
         const sql = `UPDATE drugs SET drug_code = $1, drug_name = $2, barcode = $3, quantity = $4, expiry_date = $5, category = $6 WHERE id = $7`;
