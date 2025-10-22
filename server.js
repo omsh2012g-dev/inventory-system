@@ -1,29 +1,28 @@
 const express = require('express');
-// const sqlite3 = require('sqlite3').verbose(); // <-- تم حذف هذا السطر
 const path = require('path');
 const XLSX = require('xlsx');
 const session = require('express-session');
 const bcrypt = require('bcrypt');
-const { Pool } = require('pg'); // <-- نستخدم هذه بدلاً منها
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const saltRounds = 10;
 
-// --- إعدادات الحماية وتسجيل الدخول ---
+// --- Security & Session Setup (comes first) ---
 app.use(session({
     secret: process.env.SESSION_SECRET || 'a-very-strong-secret-key-for-hmc-system',
     resave: false,
     saveUninitialized: true,
-    cookie: { secure: process.env.NODE_ENV === 'production' }
+    cookie: { secure: process.env.NODE_ENV === 'production' } // Use secure cookies in production
 }));
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true })); // Important for login form data
 
 // --- PostgreSQL Database Setup ---
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false // Required for Render connections
 });
 
 // --- Initialize Database ---
@@ -48,18 +47,25 @@ const initializeDatabase = async () => {
 };
 initializeDatabase();
 
-// --- Auth Endpoints ---
+// --- Auth Endpoints (before protection) ---
 app.post('/login', async (req, res) => {
+    console.log(">>> Received POST request on /login"); // New debug log
     const { password } = req.body;
+    console.log("Login attempt with password:", password);
     try {
         const result = await pool.query("SELECT value FROM settings WHERE key = 'admin_password'");
         if (result.rows.length > 0) {
-            const match = await bcrypt.compare(password, result.rows[0].value);
+            const hashedPassword = result.rows[0].value;
+            console.log("Stored hash:", hashedPassword);
+            const match = await bcrypt.compare(password, hashedPassword);
+            console.log("Password match result:", match);
             if (match) {
                 req.session.loggedIn = true;
+                console.log("Login successful, redirecting to dashboard.");
                 return res.redirect('/dashboard.html');
             }
         }
+        console.log("Login failed, redirecting back to login.");
         res.redirect('/login.html?error=1');
     } catch (err) {
         console.error('Login error:', err);
@@ -70,19 +76,25 @@ app.get('/logout', (req, res) => {
     req.session.destroy(() => res.redirect('/login.html'));
 });
 
-// --- Auth Middleware ---
+// --- Auth Middleware (after login routes) ---
 const isAuthenticated = (req, res, next) => {
     if (req.session.loggedIn) { next(); } else { res.redirect('/login.html'); }
 };
 
 // --- Static Files & Route Protection ---
-app.get('/', (req, res) => res.redirect('/login.html'));
+// Serve public static files (like CSS, login page images) first
+app.use(express.static(path.join(__dirname)));
+
+// Protect main application routes (comes AFTER static files)
+app.get('/', (req, res) => res.redirect('/login.html')); // Root redirects to login
 app.get('/dashboard.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
 app.get('/categories.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'categories.html')));
 app.get('/index.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/settings.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'settings.html')));
-app.use(express.static(path.join(__dirname))); // Serve static files last
+
+// Protect all API routes (comes last before error handlers/server start)
 app.use('/api', isAuthenticated);
+
 
 // --- API Endpoints ---
 app.post('/api/change-password', async (req, res) => {
@@ -191,6 +203,7 @@ app.post('/api/drugs/withdraw/:id', async (req, res) => {
 app.delete('/api/drugs/:id', async (req, res) => {
     const { id } = req.params;
     try {
+        // Transactions are deleted automatically due to ON DELETE CASCADE
         const result = await pool.query("DELETE FROM drugs WHERE id = $1", [id]);
         if (result.rowCount === 0) { return res.status(404).json({ message: 'Item not found.'}); }
         res.status(200).json({ message: 'Deletion successful.' });
