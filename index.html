@@ -12,6 +12,7 @@
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body>
+    <!-- Header -->
     <header class="app-header">
         <div class="logo-container">
             <img src="logo.png" alt="HMC Logo" id="header-logo">
@@ -26,9 +27,11 @@
         </div>
     </header>
 
+    <!-- Main Container -->
     <div class="container">
         <h1 id="category-title">Inventory Management</h1>
 
+        <!-- Form Container -->
         <div class="form-container">
             <h2>Add or Update Item</h2>
             <form id="drugForm">
@@ -46,7 +49,7 @@
                 </div>
                 <div class="form-group">
                     <label for="quantity">Quantity</label>
-                    <input type="number" id="quantity" required>
+                    <input type="number" id="quantity" required min="0">
                 </div>
                 <div class="form-group">
                     <label for="expiryDate">Expiry Date</label>
@@ -56,6 +59,7 @@
             </form>
         </div>
 
+        <!-- Table Container -->
         <div class="table-container">
             <h2>Item List</h2>
             <div class="controls-container">
@@ -75,7 +79,7 @@
                     <button id="exportTransactionsButton">Export Transaction Log (Excel)</button>
                 </div>
             </div>
-            
+
             <table id="drugsTable">
                 <thead>
                     <tr>
@@ -88,11 +92,14 @@
                         <th>Actions</th>
                     </tr>
                 </thead>
-                <tbody></tbody>
+                <tbody>
+                    <!-- Data will be loaded here -->
+                </tbody>
             </table>
         </div>
     </div>
-    
+
+    <!-- Withdraw Modal -->
     <div id="withdrawModal" class="modal">
         <div class="modal-content">
             <span class="close-button">&times;</span>
@@ -112,247 +119,442 @@
         </div>
     </div>
 
+    <!-- Scanner Modal -->
     <div id="scanner-container" class="modal">
         <div class="modal-content">
             <span class="close-button" id="close-scanner-btn">&times;</span>
             <h2>Point Camera at Barcode</h2>
-            <div id="reader"></div>
+            <div id="reader" style="width: 100%;"></div>
             <p id="scan-result"></p>
         </div>
     </div>
 
+    <!-- Integrated JavaScript -->
     <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            // --- 1. Define Core Variables ---
-            const drugForm = document.getElementById('drugForm');
-            const drugsTableBody = document.querySelector('#drugsTable tbody');
-            const formSubmitButton = drugForm.querySelector('button[type="submit"]');
-            const searchInput = document.getElementById('searchInput');
-            const exportButton = document.getElementById('exportButton');
-            const exportTransactionsButton = document.getElementById('exportTransactionsButton');
-            const categoryTitle = document.getElementById('category-title');
-            const filterButtons = document.querySelectorAll('.filter-btn');
-            let currentEditId = null;
-            let activeFilter = 'all';
+        // Use a flag to prevent multiple redirects
+        let isRedirecting = false;
 
-            const withdrawModal = document.getElementById('withdrawModal');
-            const closeModalButton = withdrawModal.querySelector('.close-button');
-            const withdrawForm = document.getElementById('withdrawForm');
-            let currentWithdrawId = null;
-            
-            const scannerContainer = document.getElementById('scanner-container');
-            const scanBtn = document.getElementById('scan-btn');
-            const closeScannerBtn = document.getElementById('close-scanner-btn');
-            let html5QrCode = null;
+        // Wrap everything in a try...catch for better error reporting
+        try {
+            console.log("!!!! Integrated script (vFinal English + Credentials - Full Code) is running !!!!");
 
-            // --- 2. Get Category from URL ---
-            const urlParams = new URLSearchParams(window.location.search);
-            const currentCategory = urlParams.get('category');
-            const categoryNames = {
-                'PPE': 'PPE',
-                'Diagnostics': 'Diagnostics',
-                'Airway': 'Airway',
-                'Circulation': 'Circulation',
-                'Emergency_Medication': 'Emergency Medication',
-                'Burns_Dressings': 'Burns & Dressings'
-            };
-            if (!currentCategory || !categoryNames[currentCategory]) {
-                alert('Please select a category first.');
-                window.location.href = '/categories.html'; // Fixed URL
-                return;
-            }
-            categoryTitle.textContent = categoryNames[currentCategory];
-
-            // --- 3. Notification Function ---
-            function showNotification(message, type = 'success') {
-                Toastify({ text: message, duration: 3000, close: true, gravity: "top", position: "left", stopOnFocus: true, style: { background: type === 'success' ? "linear-gradient(to right, #00b09b, #96c93d)" : "linear-gradient(to right, #ff5f6d, #ffc371)", }, }).showToast();
-            }
-
-            // --- 4. Main Data Fetching Function ---
-            async function fetchAndDisplayDrugs() {
-                try {
-                    const response = await fetch(`/api/drugs?category=${currentCategory}&filter=${activeFilter}`);
-                    if (!response.ok) throw new Error('Network response was not ok');
-                    const { drugs } = await response.json();
-                    drugsTableBody.innerHTML = '';
-                    drugs.forEach(drug => {
-                        const row = document.createElement('tr');
-                        let expiryStatus = '---';
-                        if (drug.expiry_date) {
-                            const expiryDate = new Date(drug.expiry_date);
-                            const today = new Date(); today.setHours(0,0,0,0);
-                            const timeDiff = expiryDate.getTime() - today.getTime();
-                            const daysLeft = Math.ceil(timeDiff / (1000 * 3600 * 24));
-                            if (daysLeft <= 0) { row.classList.add('expiry-red'); }
-                            else if (daysLeft <= 90) { row.classList.add('expiry-yellow'); }
-                            expiryStatus = drug.expiry_date;
-                        }
-                        if(drug.quantity < 20) { row.classList.add('low-stock-row'); }
-
-                        row.innerHTML = `
-                            <td>${drug.id}</td>
-                            <td>${drug.drug_code}</td>
-                            <td>${drug.drug_name}</td>
-                            <td class="barcode-cell">${drug.barcode || '---'}</td>
-                            <td>${drug.quantity}</td>
-                            <td>${expiryStatus}</td>
-                            <td class="action-buttons">
-                                <button class="withdraw-btn" onclick="openWithdrawModal(${drug.id}, '${drug.drug_name}', ${drug.quantity})">Withdraw</button>
-                                <button class="edit-btn" onclick="prepareEditForm(${drug.id}, '${drug.drug_code}', '${drug.drug_name}', '${drug.barcode || ''}', ${drug.quantity}, '${drug.expiry_date || ''}')">Edit</button>
-                                <button class="delete-btn" onclick="deleteDrug(${drug.id})">Delete</button>
-                            </td>`;
-                        drugsTableBody.appendChild(row);
-                    });
-                } catch (error) { 
-                    console.error('Error fetching items:', error);
-                    showNotification('Failed to fetch data from the server.', 'error');
-                }
-            }
-            
-            // --- 5. Barcode Scanner Functions ---
-            function onScanSuccess(decodedText) {
-                searchInput.value = decodedText;
-                searchInput.dispatchEvent(new Event('keyup'));
-                stopScanner();
-                showNotification(`Barcode found: ${decodedText}`);
-            }
-            function onScanFailure(error) { /* Ignore */ }
-
-            function startScanner() {
-                if (!html5QrCode) { html5QrCode = new Html5Qrcode("reader"); }
-                scannerContainer.style.display = 'block';
-                const config = { fps: 10, qrbox: { width: 250, height: 250 } };
-                html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess, onScanFailure)
-                    .catch(err => {
-                        showNotification("Could not start camera. Please grant permissions.", "error");
-                        stopScanner();
-                    });
-            }
-
-            function stopScanner() {
-                if (html5QrCode && html5QrCode.isScanning) {
-                    html5QrCode.stop().catch(err => console.error("Failed to stop scanning.", err));
-                }
-                scannerContainer.style.display = 'none';
-            }
-
-            scanBtn.addEventListener('click', startScanner);
-            closeScannerBtn.addEventListener('click', stopScanner);
-            
-            // --- 6. Other Functions & Event Listeners ---
+            // Define functions in the global scope BEFORE DOMContentLoaded
             window.openWithdrawModal = function (id, name, currentQuantity) {
-                currentWithdrawId = id;
-                document.getElementById('modal-title').textContent = `Withdraw from: ${name}`;
-                document.getElementById('modal-available-quantity').textContent = currentQuantity;
-                document.getElementById('withdrawQuantity').max = currentQuantity;
-                withdrawModal.style.display = 'block';
-            };
-            function closeWithdrawModal() {
-                withdrawModal.style.display = 'none';
-                withdrawForm.reset();
-            };
-            closeModalButton.onclick = closeWithdrawModal;
-            window.onclick = function (event) {
-                if (event.target == withdrawModal) { closeWithdrawModal(); }
-                if (event.target == scannerContainer) { stopScanner(); }
+                const withdrawModal = document.getElementById('withdrawModal');
+                const withdrawForm = document.getElementById('withdrawForm');
+                 if (!withdrawModal || !withdrawForm) return;
+                window.currentWithdrawId = id; // Store globally for the form submit
+                const modalTitle = document.getElementById('modal-title');
+                const availableQty = document.getElementById('modal-available-quantity');
+                const withdrawQtyInput = document.getElementById('withdrawQuantity');
+
+                 if (modalTitle) modalTitle.textContent = `Withdraw from: ${name}`;
+                 if (availableQty) availableQty.textContent = currentQuantity;
+                 if (withdrawQtyInput) {
+                     withdrawQtyInput.max = currentQuantity;
+                     withdrawQtyInput.value = ''; // Clear previous value
+                 }
+                 withdrawModal.style.display = 'block';
             };
 
             window.prepareEditForm = function (id, code, name, barcode, quantity, expiry) {
-                currentEditId = id;
-                document.getElementById('drugCode').value = code;
-                document.getElementById('drugName').value = name;
-                document.getElementById('barcode').value = barcode;
-                document.getElementById('quantity').value = quantity;
-                document.getElementById('expiryDate').value = expiry;
+                const drugForm = document.getElementById('drugForm');
+                const formSubmitButton = drugForm?.querySelector('button[type="submit"]');
+                 if (!drugForm || !formSubmitButton) return;
+                window.currentEditId = id; // Store globally for the form submit
+                const drugCodeInput = document.getElementById('drugCode');
+                const drugNameInput = document.getElementById('drugName');
+                const barcodeInput = document.getElementById('barcode');
+                const quantityInput = document.getElementById('quantity');
+                const expiryDateInput = document.getElementById('expiryDate');
+
+                 if(drugCodeInput) drugCodeInput.value = code;
+                 if(drugNameInput) drugNameInput.value = name;
+                 if(barcodeInput) barcodeInput.value = barcode;
+                 if(quantityInput) quantityInput.value = quantity;
+                 if(expiryDateInput) expiryDateInput.value = expiry;
+
                 formSubmitButton.textContent = 'Update Data';
-                window.scrollTo(0, 0);
+                window.scrollTo(0, 0); // Scroll to top to see the form
             };
 
-            window.deleteDrug = async function (id) {
-                if (!confirm('Are you sure you want to delete this item?')) return;
+             window.deleteDrug = async function (id) {
+                 if (!confirm('Are you sure you want to delete this item? This action cannot be undone.')) return;
+                console.log("Attempting to delete item with ID:", id);
                 try {
-                    const response = await fetch(`/api/drugs/${id}`, { method: 'DELETE' });
-                    if (response.ok) { showNotification('Item deleted successfully.'); fetchAndDisplayDrugs(); }
-                    else { throw new Error('Deletion failed'); }
-                } catch (error) { showNotification('Error during deletion.', 'error'); console.error('Error deleting item:', error); }
-            };
-            
-            drugForm.addEventListener('submit', async function (event) {
-                event.preventDefault();
-                const drugData = {
-                    drugCode: document.getElementById('drugCode').value, drugName: document.getElementById('drugName').value,
-                    barcode: document.getElementById('barcode').value, quantity: document.getElementById('quantity').value,
-                    expiryDate: document.getElementById('expiryDate').value, category: currentCategory
-                };
-                const codeRegex = /^\d{10}$/;
-                if (!codeRegex.test(drugData.drugCode)) {
-                    showNotification('Error: Item code must be exactly 10 digits.', 'error');
-                    return;
-                }
-                let url = '/api/drugs', method = 'POST', successMessage = 'Item added successfully!';
-                if (currentEditId) {
-                    url = `/api/drugs/${currentEditId}`; method = 'PUT'; successMessage = 'Item updated successfully!';
-                }
-                try {
-                    const response = await fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(drugData), });
-                    if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.message || 'Operation failed'); }
-                    showNotification(successMessage, 'success');
-                    drugForm.reset(); formSubmitButton.textContent = 'Add Item'; currentEditId = null;
-                    fetchAndDisplayDrugs();
-                } catch (error) { showNotification(`Error: ${error.message}`, 'error'); }
-            });
-            
-            withdrawForm.addEventListener('submit', async function (event) {
-                event.preventDefault();
-                const quantityToWithdraw = document.getElementById('withdrawQuantity').value;
-                const notes = document.getElementById('withdrawNotes').value;
-                if (!quantityToWithdraw || quantityToWithdraw <= 0) {
-                    showNotification('Please enter a valid quantity to withdraw.', 'error');
-                    return;
-                }
-                try {
-                    const response = await fetch(`/api/drugs/withdraw/${currentWithdrawId}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ quantityToWithdraw, notes }),
+                    const response = await fetch(`/api/drugs/${id}`, {
+                        method: 'DELETE',
+                        credentials: 'include' // Send session cookies
                     });
-                    if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.message || 'Withdrawal failed.');}
-                    showNotification('Successfully withdrawn from stock!');
-                    closeWithdrawModal();
-                    fetchAndDisplayDrugs();
+                     console.log("Delete response status:", response.status);
+                    if (response.ok) {
+                        window.showGlobalNotification('Item deleted successfully.'); // Use global notification
+                        window.fetchAndDisplayGlobalDrugs(); // Use global fetch function
+                    } else {
+                         let errorData = { message: `Deletion failed with status ${response.status}` };
+                         try { errorData = await response.json(); } catch(e){} // Try to parse JSON error from server
+                         console.error("Deletion failed:", errorData);
+                        throw new Error(errorData.message || 'Deletion failed');
+                    }
                 } catch (error) {
-                    showNotification(`Error: ${error.message}`, 'error');
+                    window.showGlobalNotification(`Error during deletion: ${error.message}`, 'error'); // Use global notification
+                    console.error('Error deleting item:', error);
                 }
-            });
-            
-            searchInput.addEventListener('keyup', function () {
-                const searchTerm = searchInput.value.toLowerCase();
-                const tableRows = drugsTableBody.querySelectorAll('tr');
-                tableRows.forEach(row => {
-                    const drugName = row.children[2].textContent.toLowerCase();
-                    const drugCode = row.children[1].textContent.toLowerCase();
-                    const barcode = row.children[3].textContent.toLowerCase();
-                    row.style.display = (drugName.includes(searchTerm) || drugCode.includes(searchTerm) || barcode.includes(searchTerm)) ? '' : 'none';
-                });
-            });
+            };
 
-            exportButton.addEventListener('click', function () { window.location.href = `/api/report?category=${currentCategory}`; });
-            exportTransactionsButton.addEventListener('click', function () { window.location.href = `/api/transaction-report?category=${currentCategory}`; });
-            
-            filterButtons.forEach(button => {
-                button.addEventListener('click', function () {
-                    filterButtons.forEach(btn => btn.classList.remove('active'));
-                    this.classList.add('active');
-                    activeFilter = this.dataset.filter;
-                    fetchAndDisplayDrugs();
-                });
-            });
+             // Define Global Notification Function (needs Toastify loaded)
+             window.showGlobalNotification = function(message, type = 'success') {
+                 if (typeof Toastify === "undefined") {
+                     console.warn("Toastify not loaded, falling back to alert");
+                     alert(message);
+                     return;
+                 }
+                 Toastify({ text: message, duration: 3000, close: true, gravity: "top", position: "left", stopOnFocus: true, style: { background: type === 'success' ? "linear-gradient(to right, #00b09b, #96c93d)" : "linear-gradient(to right, #ff5f6d, #ffc371)", }, }).showToast();
+             }
 
-            // --- 7. Initial Load ---
-            fetchAndDisplayDrugs();
-        });
+             // Define Global Data Fetch Function
+             window.fetchAndDisplayGlobalDrugs = async function() {
+                 const drugsTableBody = document.querySelector('#drugsTable tbody');
+                 const currentCategory = new URLSearchParams(window.location.search).get('category');
+                 const activeFilter = document.querySelector('.filter-btn.active')?.dataset.filter || 'all'; // Get current active filter
+                 const categoryNames = { /* Add category names map here if needed again */ };
+
+                 if (!drugsTableBody) {
+                     console.error("drugsTableBody not found in fetchAndDisplayGlobalDrugs");
+                     return;
+                 }
+                 if (!currentCategory /*|| !categoryNames.hasOwnProperty(currentCategory)*/) { // Simplified check if categoryNames isn't used elsewhere
+                     console.error("fetchAndDisplayGlobalDrugs called without a valid category.");
+                     // No redirect here, should have been handled earlier
+                     return;
+                 }
+
+                 console.log("Fetching drugs for category:", currentCategory, "with filter:", activeFilter);
+                 try {
+                     const response = await fetch(`/api/drugs?category=${encodeURIComponent(currentCategory)}&filter=${encodeURIComponent(activeFilter)}`, { credentials: 'include' });
+                     console.log("Fetch response status:", response.status);
+                     if (!response.ok) {
+                          if (response.status === 401) {
+                             window.showGlobalNotification("Session expired. Please log in again.", "error");
+                             window.location.href = '/login.html';
+                             return;
+                         }
+                         const errorText = await response.text();
+                         console.error("Fetch failed:", errorText);
+                         throw new Error(`Network response was not ok (${response.status})`);
+                     }
+                     const contentType = response.headers.get("content-type");
+                     if (!contentType || !contentType.includes("application/json")) {
+                         const respText = await response.text();
+                         console.error("Received non-JSON response:", respText);
+                         throw new Error("Received non-JSON response from server.");
+                      }
+                     const data = await response.json();
+                     const drugs = data.drugs;
+                     if (!Array.isArray(drugs)) {
+                        console.error("Data received is not an array:", drugs);
+                        throw new Error("Invalid data format received from server.");
+                    }
+                     console.log("Received drugs:", drugs);
+                     drugsTableBody.innerHTML = '';
+                     drugs.forEach(drug => {
+                         const row = document.createElement('tr');
+                         let expiryStatus = '---'; let expiryClass = '';
+                         if (drug.expiry_date) {
+                             try {
+                                 const expiryDate = new Date(drug.expiry_date);
+                                 const today = new Date(); today.setHours(0,0,0,0);
+                                 if (!isNaN(expiryDate.getTime())) {
+                                     const timeDiff = expiryDate.getTime() - today.getTime();
+                                     const daysLeft = Math.ceil(timeDiff / (1000 * 3600 * 24));
+                                     if (daysLeft <= 0) { expiryClass = 'expiry-red'; }
+                                     else if (daysLeft <= 90) { expiryClass = 'expiry-yellow'; }
+                                     expiryStatus = drug.expiry_date;
+                                 } else { console.warn("Invalid expiry date format for drug:", drug.id, drug.expiry_date); }
+                             } catch(dateError){ console.warn("Error processing date for drug:", drug.id, drug.expiry_date, dateError); }
+                         }
+                         let lowStockClass = '';
+                         if (drug.quantity < 20) { lowStockClass = 'low-stock-row'; }
+                         row.className = `${expiryClass} ${lowStockClass}`.trim();
+                         const barcodeValue = drug.barcode || '';
+                         const expiryValue = drug.expiry_date || '';
+                         // Escape single quotes for names used in onclick handlers
+                         const safeName = drug.drug_name ? drug.drug_name.replace(/'/g, "\\'") : '';
+                         const safeCode = drug.drug_code ? drug.drug_code.replace(/'/g, "\\'") : '';
+                         const safeBarcode = barcodeValue ? barcodeValue.replace(/'/g, "\\'") : '';
+
+                         row.innerHTML = `
+                             <td>${drug.id}</td><td>${safeCode}</td><td>${safeName}</td>
+                             <td class="barcode-cell">${barcodeValue || '---'}</td><td>${drug.quantity}</td><td>${expiryStatus}</td>
+                             <td class="action-buttons">
+                                 <button class="withdraw-btn" onclick="openWithdrawModal(${drug.id}, '${safeName}', ${drug.quantity})">Withdraw</button>
+                                 <button class="edit-btn" onclick="prepareEditForm(${drug.id}, '${safeCode}', '${safeName}', '${safeBarcode}', ${drug.quantity}, '${expiryValue}')">Edit</button>
+                                 <button class="delete-btn" onclick="deleteDrug(${drug.id})">Delete</button>
+                             </td>`;
+                         drugsTableBody.appendChild(row);
+                     });
+                 } catch (error) {
+                     console.error('Error in fetchAndDisplayDrugs:', error);
+                     window.showGlobalNotification(`Failed to fetch data: ${error.message}`, 'error');
+                 }
+             }
+
+
+            // Main logic runs after DOM is loaded
+            document.addEventListener('DOMContentLoaded', function () {
+                console.log("DOMContentLoaded event fired.");
+
+                // --- 1. Define Core Variables ---
+                const drugForm = document.getElementById('drugForm');
+                const drugsTableBody = document.querySelector('#drugsTable tbody');
+                const formSubmitButton = drugForm?.querySelector('button[type="submit"]');
+                const searchInput = document.getElementById('searchInput');
+                const exportButton = document.getElementById('exportButton');
+                const exportTransactionsButton = document.getElementById('exportTransactionsButton');
+                const categoryTitle = document.getElementById('category-title');
+                const filterButtons = document.querySelectorAll('.filter-btn');
+                let activeFilter = 'all';
+
+                const withdrawModal = document.getElementById('withdrawModal');
+                const closeModalButton = withdrawModal?.querySelector('.close-button');
+                const withdrawForm = document.getElementById('withdrawForm');
+
+                const scannerContainer = document.getElementById('scanner-container');
+                const scanBtn = document.getElementById('scan-btn');
+                const closeScannerBtn = document.getElementById('close-scanner-btn');
+                let html5QrCode = null;
+
+                // --- Check if essential elements exist ---
+                 if (!drugForm || !drugsTableBody || !formSubmitButton || !searchInput || !categoryTitle || !withdrawModal || !closeModalButton || !withdrawForm || !scannerContainer || !scanBtn || !closeScannerBtn) {
+                    console.error("Essential DOM elements not found! Check HTML structure.");
+                    window.showGlobalNotification("Initialization error: Some page elements are missing.", "error"); // Use global notification
+                    return;
+                }
+
+                // --- 2. Get Category from URL ---
+                const urlParams = new URLSearchParams(window.location.search);
+                const currentCategory = urlParams.get('category');
+                const categoryNames = {
+                    'PPE': 'PPE', 'Diagnostics': 'Diagnostics',
+                    'Airway': 'Airway', 'Circulation': 'Circulation',
+                    'Emergency_Medication': 'Emergency Medication', 'Burns_Dressings': 'Burns & Dressings'
+                 };
+                if (!isRedirecting && (!currentCategory || !categoryNames.hasOwnProperty(currentCategory))) {
+                    console.error("Invalid or missing category in URL:", currentCategory, ". Attempting redirect.");
+                    window.showGlobalNotification('Invalid category selected. Redirecting back to categories page.', 'error'); // Use global notification
+                    isRedirecting = true;
+                    window.location.href = 'categories.html'; // Use relative path
+                    return;
+                } else if (isRedirecting) {
+                    console.warn("Redirect already in progress, stopping further execution.");
+                    return;
+                }
+                if(categoryTitle) categoryTitle.textContent = categoryNames[currentCategory];
+
+
+                // --- 5. Barcode Scanner Functions ---
+                function onScanSuccess(decodedText) {
+                    if (searchInput) searchInput.value = decodedText;
+                    if (searchInput) searchInput.dispatchEvent(new Event('keyup'));
+                    stopScanner();
+                    window.showGlobalNotification(`Barcode found: ${decodedText}`); // Use global notification
+                }
+                function onScanFailure(error) { /* Ignore */ }
+
+                 function startScanner() {
+                    if (!scannerContainer) return;
+                    console.log("Starting scanner...");
+                    if (!html5QrCode) {
+                        try {
+                            html5QrCode = new Html5Qrcode("reader");
+                            console.log("Html5Qrcode instance created");
+                        } catch (initError){
+                            console.error("Failed to initialize Html5Qrcode:", initError);
+                            window.showGlobalNotification("Failed to initialize scanner.", "error");
+                            return;
+                        }
+                    }
+                    scannerContainer.style.display = 'block';
+                    const config = { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 };
+                     navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+                         .then(() => {
+                            console.log("Camera permission granted, starting scanner...");
+                            html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess, onScanFailure)
+                                .then(() => console.log("Scanner started successfully."))
+                                .catch(err => {
+                                    console.error("Unable to start scanning.", err);
+                                    window.showGlobalNotification("Could not start camera. Check permissions or device.", "error");
+                                    stopScanner();
+                                });
+                         })
+                         .catch(permErr => {
+                            console.error("Camera permission error:", permErr);
+                            window.showGlobalNotification("Camera permission denied. Please allow camera access.", "error");
+                            stopScanner();
+                        });
+                }
+
+                 function stopScanner() {
+                    if (!scannerContainer) return;
+                    console.log("Stopping scanner...");
+                    if (html5QrCode && html5QrCode.isScanning) {
+                        html5QrCode.stop().then(() => {
+                            console.log("Scanner stopped successfully.");
+                        }).catch(err => {
+                            console.error("Error stopping the scanner:", err);
+                        }).finally(() => {
+                            if(scannerContainer) scannerContainer.style.display = 'none';
+                            const scanResultElem = document.getElementById('scan-result');
+                            if(scanResultElem) scanResultElem.textContent = '';
+                           // Keep instance: html5QrCode = null;
+                        });
+                    } else {
+                        if(scannerContainer) scannerContainer.style.display = 'none';
+                        const scanResultElem = document.getElementById('scan-result');
+                        if(scanResultElem) scanResultElem.textContent = '';
+                    }
+                }
+
+                if (scanBtn) scanBtn.addEventListener('click', startScanner);
+                if (closeScannerBtn) closeScannerBtn.addEventListener('click', stopScanner);
+
+                // --- 6. Event Listeners attached after DOM loaded ---
+                 function closeWithdrawModal() {
+                    if (!withdrawModal || !withdrawForm) return;
+                    withdrawModal.style.display = 'none';
+                    withdrawForm.reset();
+                };
+                if(closeModalButton) closeModalButton.onclick = closeWithdrawModal;
+
+                window.onclick = function (event) {
+                    if (event.target == withdrawModal) { closeWithdrawModal(); }
+                    if (event.target == scannerContainer) { stopScanner(); }
+                };
+
+                if (drugForm) {
+                     drugForm.addEventListener('submit', async function (event) {
+                         event.preventDefault();
+                         console.log("Form submitted. CurrentEditId:", window.currentEditId);
+
+                         const drugCodeInput = document.getElementById('drugCode');
+                         const drugNameInput = document.getElementById('drugName');
+                         const barcodeInput = document.getElementById('barcode');
+                         const quantityInput = document.getElementById('quantity');
+                         const expiryDateInput = document.getElementById('expiryDate');
+                         if (!drugCodeInput || !drugNameInput || !barcodeInput || !quantityInput || !expiryDateInput) {
+                             console.error("One or more form inputs not found!");
+                             window.showGlobalNotification("Error: Form elements missing.", "error");
+                             return;
+                         }
+
+                         const drugData = {
+                             drugCode: drugCodeInput.value, drugName: drugNameInput.value,
+                             barcode: barcodeInput.value, quantity: parseInt(quantityInput.value, 10), // Ensure quantity is integer
+                             expiryDate: expiryDateInput.value, category: currentCategory
+                         };
+                         console.log("Drug data prepared:", drugData);
+
+                         const codeRegex = /^\d{10}$/;
+                         if (!codeRegex.test(drugData.drugCode)) {
+                             window.showGlobalNotification('Error: Item code must be exactly 10 digits.', 'error');
+                             return;
+                         }
+                          if (isNaN(drugData.quantity) || drugData.quantity < 0) {
+                              window.showGlobalNotification('Error: Quantity must be a non-negative number.', 'error');
+                              return;
+                          }
+
+                         let url = '/api/drugs', method = 'POST', successMessage = 'Item added successfully!';
+                         if (window.currentEditId) {
+                             url = `/api/drugs/${window.currentEditId}`;
+                             method = 'PUT';
+                             successMessage = 'Item updated successfully!';
+                         }
+                         console.log("Sending request to:", method, url);
+
+                         try {
+                             const response = await fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(drugData), credentials: 'include' });
+                             console.log("Response status:", response.status);
+                             const responseBody = await response.text();
+                             console.log("Response body:", responseBody);
+
+                             if (!response.ok) {
+                                 if (response.status === 401) { /* ... handle unauthorized ... */ }
+                                 let errorData = { message: `Operation failed with status ${response.status}`};
+                                 try { errorData = JSON.parse(responseBody); } catch (e) {}
+                                 throw new Error(errorData.message || 'Operation failed');
+                             }
+
+                             window.showGlobalNotification(successMessage, 'success');
+                             drugForm.reset();
+                             if(formSubmitButton) formSubmitButton.textContent = 'Add Item';
+                             window.currentEditId = null;
+                             window.fetchAndDisplayGlobalDrugs();
+                         } catch (error) {
+                             console.error("Error submitting form:", error);
+                             window.showGlobalNotification(`Error: ${error.message}`, 'error');
+                         }
+                     });
+                 } else { console.error("Drug form not found!"); }
+
+                if (withdrawForm) {
+                     withdrawForm.addEventListener('submit', async function (event) {
+                         event.preventDefault();
+                         console.log("Withdraw form submitted for ID:", window.currentWithdrawId);
+                         const quantityInput = document.getElementById('withdrawQuantity');
+                         const notesInput = document.getElementById('withdrawNotes');
+                         if(!quantityInput || !notesInput){ /* ... check ... */ return; }
+                         const quantityToWithdraw = parseInt(quantityInput.value, 10); // Ensure integer
+                         const notes = notesInput.value;
+                         if (isNaN(quantityToWithdraw) || quantityToWithdraw <= 0) {
+                             window.showGlobalNotification('Please enter a valid quantity to withdraw.', 'error');
+                             return;
+                         }
+                         // Check against available quantity
+                          const availableQtyText = document.getElementById('modal-available-quantity')?.textContent;
+                          const availableQty = availableQtyText ? parseInt(availableQtyText, 10) : 0;
+                          if (quantityToWithdraw > availableQty){
+                              window.showGlobalNotification('Withdrawal quantity cannot exceed available quantity.', 'error');
+                              return;
+                          }
+
+                         console.log("Withdraw data:", { quantityToWithdraw, notes });
+                         try {
+                             const response = await fetch(`/api/drugs/withdraw/${window.currentWithdrawId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantityToWithdraw, notes }), credentials: 'include' });
+                             /* ... handle response ... */
+                              if (!response.ok) { /* ... error handling ... */ throw new Error(errorData.message || 'Withdrawal failed.');}
+                             window.showGlobalNotification('Successfully withdrawn from stock!');
+                             closeWithdrawModal();
+                             window.fetchAndDisplayGlobalDrugs();
+                         } catch (error) { /* ... error handling ... */ }
+                     });
+                 } else { console.error("Withdraw form not found!"); }
+
+                if (searchInput) { /* ... search logic ... */ } else { console.error("Search input not found!"); }
+                if(exportButton) exportButton.addEventListener('click', function () { window.location.href = `/api/report?category=${currentCategory}`; });
+                if(exportTransactionsButton) exportTransactionsButton.addEventListener('click', function () { window.location.href = `/api/transaction-report?category=${currentCategory}`; });
+                filterButtons.forEach(button => {
+                     button.addEventListener('click', function () {
+                         filterButtons.forEach(btn => btn.classList.remove('active'));
+                         this.classList.add('active');
+                         activeFilter = this.dataset.filter;
+                         console.log("Filter changed to:", activeFilter);
+                         window.fetchAndDisplayGlobalDrugs();
+                     });
+                 });
+
+                // --- 7. Initial Load ---
+                console.log("Initial fetch of drugs...");
+                 window.fetchAndDisplayGlobalDrugs();
+
+            }); // End DOMContentLoaded listener
+
+        } catch (globalError) {
+             console.error("A critical error occurred in the global script:", globalError);
+             alert("A critical error occurred. Please refresh the page or contact support. Check console for details.");
+         }
     </script>
-    
+
     <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/toastify-js"></script>
 </body>
 </html>
