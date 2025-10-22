@@ -33,12 +33,13 @@
                 </div>
                 <button type="submit">Login</button>
             </form>
+            <!-- رسالة الخطأ ستظهر الآن فقط إذا أرسلها الخادم مع الرابط -->
             <p id="error-message" class="error-message" style="display: none;">Incorrect password. Please try again.</p>
         </div>
     </div>
 
     <script>
-        // Script to show error message if login fails
+        // التحقق من وجود خطأ في الرابط عند تحميل الصفحة
         document.addEventListener('DOMContentLoaded', function() {
             const urlParams = new URLSearchParams(window.location.search);
             if (urlParams.has('error')) {
