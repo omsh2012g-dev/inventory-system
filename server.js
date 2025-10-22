@@ -1,16 +1,16 @@
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose(); // Keep sqlite3 import if still needed elsewhere, otherwise remove
+// const sqlite3 = require('sqlite3').verbose(); // <-- تم حذف هذا السطر
 const path = require('path');
 const XLSX = require('xlsx');
 const session = require('express-session');
 const bcrypt = require('bcrypt');
-const { Pool } = require('pg'); // Use pg for PostgreSQL
+const { Pool } = require('pg'); // <-- نستخدم هذه بدلاً منها
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const saltRounds = 10;
 
-// --- Security & Session Setup ---
+// --- إعدادات الحماية وتسجيل الدخول ---
 app.use(session({
     secret: process.env.SESSION_SECRET || 'a-very-strong-secret-key-for-hmc-system',
     resave: false,
@@ -30,26 +30,9 @@ const pool = new Pool({
 const initializeDatabase = async () => {
     const client = await pool.connect();
     try {
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            );
-        `);
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS drugs (
-                id SERIAL PRIMARY KEY, drug_code TEXT NOT NULL, drug_name TEXT NOT NULL,
-                barcode TEXT, quantity INTEGER NOT NULL, expiry_date DATE, category TEXT NOT NULL,
-                UNIQUE(drug_code, category), UNIQUE(barcode, category)
-            );
-        `);
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS transactions (
-                id SERIAL PRIMARY KEY, drug_id INTEGER REFERENCES drugs(id) ON DELETE CASCADE,
-                type TEXT NOT NULL, quantity_change INTEGER NOT NULL, notes TEXT,
-                timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
+        await client.query(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
+        await client.query(`CREATE TABLE IF NOT EXISTS drugs (id SERIAL PRIMARY KEY, drug_code TEXT NOT NULL, drug_name TEXT NOT NULL, barcode TEXT, quantity INTEGER NOT NULL, expiry_date DATE, category TEXT NOT NULL, UNIQUE(drug_code, category), UNIQUE(barcode, category))`);
+        await client.query(`CREATE TABLE IF NOT EXISTS transactions (id SERIAL PRIMARY KEY, drug_id INTEGER REFERENCES drugs(id) ON DELETE CASCADE, type TEXT NOT NULL, quantity_change INTEGER NOT NULL, notes TEXT, timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP)`);
         const passwordCheck = await client.query("SELECT value FROM settings WHERE key = 'admin_password'");
         if (passwordCheck.rows.length === 0) {
             const hash = await bcrypt.hash('12345', saltRounds);
@@ -98,9 +81,8 @@ app.get('/dashboard.html', isAuthenticated, (req, res) => res.sendFile(path.join
 app.get('/categories.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'categories.html')));
 app.get('/index.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/settings.html', isAuthenticated, (req, res) => res.sendFile(path.join(__dirname, 'settings.html')));
-// Serve static files AFTER protected routes to ensure auth check happens first
-app.use(express.static(path.join(__dirname)));
-app.use('/api', isAuthenticated); // Protect API routes
+app.use(express.static(path.join(__dirname))); // Serve static files last
+app.use('/api', isAuthenticated);
 
 // --- API Endpoints ---
 app.post('/api/change-password', async (req, res) => {
@@ -156,7 +138,6 @@ app.get('/api/drugs', async (req, res) => {
     }
 });
 
-// --- إضافة صنف (مع تدقيق تسجيل الحركة) ---
 app.post('/api/drugs', async (req, res) => {
     const { drugCode, drugName, barcode, quantity, expiryDate, category } = req.body;
     const client = await pool.connect();
@@ -165,28 +146,22 @@ app.post('/api/drugs', async (req, res) => {
         const insertDrugSql = `INSERT INTO drugs (drug_code, drug_name, barcode, quantity, expiry_date, category) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`;
         const drugRes = await client.query(insertDrugSql, [drugCode, drugName, barcode || null, quantity, expiryDate || null, category]);
         const drug_id = drugRes.rows[0].id;
-
-        // التأكد من تسجيل الحركة بنجاح قبل إرسال الرد
         try {
             const insertTransactionSql = `INSERT INTO transactions (drug_id, type, quantity_change, notes) VALUES ($1, 'Initial Add', $2, $3)`;
             await client.query(insertTransactionSql, [drug_id, quantity, 'Initial stock entry']);
         } catch (transactionErr) {
-            // تسجيل الخطأ ولكن عدم إيقاف العملية الرئيسية إذا كان الخطأ غير حرج
             console.error("Non-critical error inserting into transactions table:", transactionErr.message);
         }
-
         await client.query('COMMIT');
-        res.status(201).json({ id: drug_id }); // إرسال الرد فقط بعد النجاح
+        res.status(201).json({ id: drug_id });
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('Add drug error:', err);
-        // إرسال رد خطأ واضح
         res.status(500).json({ message: `Failed to add item: ${err.message}` });
     } finally {
         client.release();
     }
 });
-
 
 app.post('/api/drugs/withdraw/:id', async (req, res) => {
     const { id } = req.params;
@@ -215,7 +190,6 @@ app.post('/api/drugs/withdraw/:id', async (req, res) => {
 
 app.delete('/api/drugs/:id', async (req, res) => {
     const { id } = req.params;
-    // Transactions deleted automatically due to ON DELETE CASCADE
     try {
         const result = await pool.query("DELETE FROM drugs WHERE id = $1", [id]);
         if (result.rowCount === 0) { return res.status(404).json({ message: 'Item not found.'}); }
